@@ -4,19 +4,22 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .agents.orchestrator import GitFixOrchestrator
+from .benchmark.runner import BenchmarkRunner
 from .config import Config
 from .detector import detect_project
 from .git.repo_manager import GitRepoManager
 from .git.watcher import GitWatcher
-from .agents.orchestrator import GitFixOrchestrator
 from .memory.error_db import ErrorDatabase
 
 console = Console()
 
+
 @click.group()
 def cli():
-    """GitFix-Agent: Autonomous repository-agnostic AI software maintenance agent."""
+    """GitFix-Agent: Production-Grade Autonomous AI Software Maintenance Engineer."""
     pass
+
 
 @cli.command()
 def init():
@@ -24,19 +27,22 @@ def init():
     repo_dir = Path.cwd()
     config = Config(str(repo_dir))
     config.save()
-    
+
     repo_mgr = GitRepoManager(repo_dir)
     hook_installed = False
     if repo_mgr.is_git_repo():
         watcher = GitWatcher(repo_mgr)
         hook_installed = watcher.install_post_commit_hook()
 
-    console.print(Panel.fit(
-        f"[bold green]GitFix-Agent Initialized![/bold green]\n"
-        f"Config file: [cyan]{config.config_path}[/cyan]\n"
-        f"Git Hook Installed: {'[green]Yes[/green]' if hook_installed else '[yellow]No (Not a git repo or permissions issue)[/yellow]'}",
-        title="GitFix Setup"
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold green]GitFix-Agent Initialized![/bold green]\n"
+            f"Config file: [cyan]{config.config_path}[/cyan]\n"
+            f"Git Hook Installed: {'[green]Yes[/green]' if hook_installed else '[yellow]No (Not a git repo or permissions issue)[/yellow]'}",
+            title="GitFix Setup",
+        )
+    )
+
 
 @cli.command()
 def analyze():
@@ -44,7 +50,7 @@ def analyze():
     repo_dir = Path.cwd()
     project_info = detect_project(repo_dir)
     repo_mgr = GitRepoManager(repo_dir)
-    
+
     table = Table(title="GitFix Project Inspection")
     table.add_column("Property", style="cyan")
     table.add_column("Value", style="magenta")
@@ -64,11 +70,14 @@ def analyze():
 
     console.print(table)
 
+
 @cli.command()
 @click.option("--auto-commit", is_flag=True, help="Automatically commit fix directly without safety branch.")
+@click.option("--auto-pr", is_flag=True, help="Create safety branch and open GitHub Pull Request automatically.")
+@click.option("--sandbox", is_flag=True, default=True, help="Execute test suite in isolated Docker container sandbox.")
 @click.option("--provider", type=str, help="Override LLM provider (gemini, openai, mock).")
 @click.option("--model", type=str, help="Override LLM model name.")
-def fix(auto_commit, provider, model):
+def fix(auto_commit, auto_pr, sandbox, provider, model):
     """Diagnose and automatically fix commit regressions in the project."""
     repo_dir = Path.cwd()
     config = Config(str(repo_dir))
@@ -77,15 +86,26 @@ def fix(auto_commit, provider, model):
     if model:
         config._data["agent"]["model"] = model
 
-    orchestrator = GitFixOrchestrator(repo_dir=repo_dir, config=config)
-    res = orchestrator.run_repair_flow(auto_commit=auto_commit)
+    orchestrator = GitFixOrchestrator(repo_dir=repo_dir, config=config, use_sandbox=sandbox)
+    res = orchestrator.run_repair_flow(auto_commit=auto_commit, auto_pr=auto_pr)
 
     if res.success:
         console.print(f"[bold green]✨ Repair completed successfully in {res.retries_used} attempt(s)![/bold green]")
         if res.branch_created:
             console.print(f"Safety Branch created: [cyan]{res.branch_created}[/cyan]")
+        if res.pr_url:
+            console.print(f"GitHub Pull Request: [cyan]{res.pr_url}[/cyan]")
     else:
         console.print(f"[bold red]❌ Repair failed after {res.retries_used} attempt(s).[/bold red]")
+
+
+@cli.command()
+def benchmark():
+    """Run standardized multi-language AI coding evaluation benchmark suite."""
+    repo_dir = Path.cwd()
+    runner = BenchmarkRunner(repo_dir=repo_dir)
+    runner.run_benchmark()
+
 
 @cli.command()
 def watch():
@@ -103,6 +123,7 @@ def watch():
 
     watcher = GitWatcher(repo_mgr)
     watcher.watch(on_new_commit)
+
 
 @cli.command()
 def history():
@@ -130,6 +151,7 @@ def history():
         )
 
     console.print(table)
+
 
 if __name__ == "__main__":
     cli()

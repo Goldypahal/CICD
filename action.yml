@@ -1,0 +1,42 @@
+name: 'GitFix AI Autonomous Engineer'
+description: 'Autonomous repository-agnostic AI agent that detects test regressions, diagnoses root causes, and creates verified PR patches.'
+author: 'GitFix Team'
+inputs:
+  provider:
+    description: 'LLM provider (gemini, openai, anthropic, ollama, mock)'
+    required: false
+    default: 'gemini'
+  model:
+    description: 'LLM model name'
+    required: false
+    default: 'gemini-2.5-flash'
+  auto_pr:
+    description: 'Automatically open GitHub Pull Request on successful fix'
+    required: false
+    default: 'true'
+  use_sandbox:
+    description: 'Run test suite inside Docker sandbox'
+    required: false
+    default: 'true'
+outputs:
+  success:
+    description: 'Whether the regression was successfully repaired'
+  pr_url:
+    description: 'URL of the created Pull Request if auto_pr is enabled'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install GitFix Agent
+      shell: bash
+      run: pip install -e .
+
+    - name: Run Autonomous Repair Pipeline
+      shell: bash
+      run: |
+        gitfix fix --auto-pr=${{ inputs.auto_pr }} --sandbox=${{ inputs.use_sandbox }}

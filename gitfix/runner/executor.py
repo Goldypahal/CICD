@@ -11,6 +11,9 @@ class ExecutionResult:
     stderr: str
     passed: bool
 
+TestExecutionResult = ExecutionResult
+
+
 class TestExecutor:
     def __init__(self, root_dir: Optional[Path] = None, timeout: int = 120):
         self.root_dir = Path(root_dir or Path.cwd()).resolve()
