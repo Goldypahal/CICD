@@ -42,7 +42,8 @@ def test_orchestrator_repair_flow_with_mock_llm():
         orchestrator = GitFixOrchestrator(
             repo_dir=root,
             config=config,
-            llm_provider=mock_llm
+            llm_provider=mock_llm,
+            use_sandbox=False,
         )
 
         result = orchestrator.run_repair_flow(auto_commit=True)

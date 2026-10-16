@@ -10,6 +10,7 @@ class ExecutionResult:
     stdout: str
     stderr: str
     passed: bool
+    execution_time: float = 0.0
 
 TestExecutionResult = ExecutionResult
 

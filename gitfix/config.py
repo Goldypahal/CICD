@@ -1,3 +1,4 @@
+import copy
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -39,7 +40,7 @@ class Config:
         self._data: Dict[str, Any] = self._load()
 
     def _load(self) -> Dict[str, Any]:
-        data = DEFAULT_CONFIG.copy()
+        data = copy.deepcopy(DEFAULT_CONFIG)
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:

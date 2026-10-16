@@ -16,9 +16,16 @@ class ToolResult:
 class AgentTools:
     """Provides file inspection, code search, testing, and patch tools for agentic LLM loops."""
 
-    def __init__(self, repo_dir: Path, test_command: Optional[str] = None):
+    def __init__(
+        self,
+        repo_dir: Path,
+        test_command: Optional[str] = None,
+        security_agent: Optional[Any] = None,
+    ):
         self.repo_dir = Path(repo_dir).resolve()
         self.test_command = test_command or "pytest"
+        self.security_agent = security_agent
+        self.backups: List[Tuple[Path, str]] = []
 
     def read_file(
         self, filepath: str, start_line: Optional[int] = None, end_line: Optional[int] = None
@@ -95,6 +102,15 @@ class AgentTools:
     def run_test(self, custom_command: Optional[str] = None) -> ToolResult:
         """Execute project test command and return test runner output."""
         cmd = custom_command or self.test_command
+        # Security sanitization for custom test command
+        if custom_command:
+            dangerous_chars = [";", "&&", "||", "|", "`", "$("]
+            if any(char in custom_command for char in dangerous_chars):
+                return ToolResult(
+                    success=False,
+                    output="Security Policy Blocked: Custom test command contains disallowed command chaining characters.",
+                )
+
         try:
             res = subprocess.run(cmd, cwd=self.repo_dir, capture_output=True, text=True, shell=True, timeout=60)
             combined_output = (res.stdout + "\n" + res.stderr).strip()
@@ -108,18 +124,43 @@ class AgentTools:
             return ToolResult(success=False, output=f"Test execution error: {str(e)}")
 
     def apply_patch(self, filepath: str, new_content: str) -> ToolResult:
-        """Overwrite file content with updated code."""
+        """Pre-audit and overwrite file content with updated code in a reversible transaction."""
         target_path = (self.repo_dir / filepath).resolve()
         if not target_path.is_relative_to(self.repo_dir):
             return ToolResult(success=False, output="Security Error: File path outside workspace boundary.")
 
+        # Pre-audit before disk mutation
+        if self.security_agent:
+            is_safe, violations = self.security_agent.audit_file_modification(filepath, new_content)
+            if not is_safe:
+                return ToolResult(
+                    success=False,
+                    output=f"Security Policy Blocked: Modification to '{filepath}' rejected. Reasons: {'; '.join(violations)}",
+                    metadata={"violations": violations},
+                )
+
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
+            orig_content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+            self.backups.append((target_path, orig_content))
             with open(target_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
             return ToolResult(success=True, output=f"Successfully updated file: '{filepath}'.")
         except Exception as e:
             return ToolResult(success=False, output=f"Failed to apply patch to '{filepath}': {str(e)}")
+
+    def rollback(self) -> None:
+        """Roll back all file modifications made by apply_patch during this session."""
+        for path, orig_content in reversed(self.backups):
+            try:
+                if orig_content == "":
+                    if path.exists():
+                        path.unlink()
+                else:
+                    path.write_text(orig_content, encoding="utf-8")
+            except Exception as e:
+                print(f"[AgentTools] Rollback error for {path}: {e}")
+        self.backups.clear()
 
 
 def get_agent_tools_schema() -> List[Dict[str, Any]]:

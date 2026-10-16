@@ -48,11 +48,16 @@ class GitFixOrchestrator:
         )
 
         # Specialized Agent Initialization
+        self.security_agent = SecurityAgent(self.repo_dir)
         self.regression_agent = RegressionAgent(self.repo_dir, self.project_info.test_command)
         self.diagnosis_agent = DiagnosisAgent(self.repo_dir)
-        self.patch_agent = PatchAgent(self.repo_dir, self.llm, self.project_info.test_command)
+        self.patch_agent = PatchAgent(
+            self.repo_dir,
+            self.llm,
+            self.project_info.test_command,
+            security_agent=self.security_agent,
+        )
         self.verification_agent = VerificationAgent(self.repo_dir, use_sandbox=use_sandbox)
-        self.security_agent = SecurityAgent(self.repo_dir)
         self.pr_manager = GitHubPRManager(self.repo_dir)
 
     def run_repair_flow(self, auto_commit: Optional[bool] = None, auto_pr: bool = False) -> OrchestratorResult:
@@ -113,6 +118,8 @@ class GitFixOrchestrator:
             sec_audit = self.security_agent.audit_patch(patch_res.modified_files)
             if not sec_audit.is_safe:
                 print(f"[GitFix-Orchestrator] 🛑 Security policy blocked patch: {sec_audit.violations}")
+                # Rollback changes immediately so unauthorized files do not persist on disk
+                self.repo_manager.reset_hard()
                 continue
 
             all_modified_files.extend(patch_res.modified_files)
@@ -123,10 +130,23 @@ class GitFixOrchestrator:
                 print(f"\n[GitFix-Orchestrator] 🎉 SUCCESS! Tests passed after attempt {attempt}.")
                 
                 commit_msg = f"fix(ai-agent): resolve {diag_report.parsed_error.error_type}\n\nRoot cause: {patch_res.explanation}"
-                committed = self.repo_manager.stage_and_commit(commit_msg)
+                committed = False
+                if should_auto_commit or auto_pr:
+                    committed = self.repo_manager.stage_and_commit(commit_msg, files=patch_res.modified_files)
+                    if not committed:
+                        print("[GitFix-Orchestrator] ❌ Failed to commit repair changes.")
+                        return OrchestratorResult(
+                            success=False,
+                            commit_hash=commit_hash,
+                            branch_created=branch_created,
+                            pr_url=None,
+                            retries_used=attempt,
+                            summary="Tests passed, but git commit failed.",
+                            modified_files=list(set(all_modified_files)),
+                        )
 
                 pr_url = None
-                if auto_pr and branch_created:
+                if auto_pr and branch_created and committed:
                     pr_res = self.pr_manager.create_pull_request(
                         branch_name=branch_created,
                         title=f"fix(ai-agent): resolve regression in {commit_hash[:7]}",
@@ -147,12 +167,13 @@ class GitFixOrchestrator:
                 latest_output = verify_res.execution_result.stderr or verify_res.execution_result.stdout
 
         print(f"\n[GitFix-Orchestrator] 🛑 Max retries ({max_retries}) reached without resolving regression.")
+        self.repo_manager.reset_hard()
         return OrchestratorResult(
             success=False,
             commit_hash=commit_hash,
             branch_created=branch_created,
             pr_url=None,
             retries_used=max_retries,
-            summary="Failed to repair regression within max retries.",
+            summary="Failed to repair regression within max retries. Unverified changes were reverted.",
             modified_files=list(set(all_modified_files)),
         )

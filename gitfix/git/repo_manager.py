@@ -46,14 +46,27 @@ class GitRepoManager:
 
     def create_ai_branch(self, commit_hash: str, prefix: str = "ai/fix-") -> str:
         branch_name = f"{prefix}{commit_hash[:7]}"
-        # Checkout -b branch_name
-        self._run_git(["checkout", "-b", branch_name])
+        code, _, stderr = self._run_git(["checkout", "-b", branch_name])
+        if code != 0:
+            # If branch already exists, try checking it out directly
+            code_co, _, stderr_co = self._run_git(["checkout", branch_name])
+            if code_co != 0:
+                raise RuntimeError(
+                    f"Failed to create or switch to safety branch '{branch_name}': {stderr} | {stderr_co}"
+                )
         return branch_name
 
-    def stage_and_commit(self, message: str) -> bool:
-        code_add, _, _ = self._run_git(["add", "."])
-        if code_add != 0:
-            return False
+    def stage_and_commit(self, message: str, files: Optional[List[str]] = None) -> bool:
+        if files:
+            for f in files:
+                code_add, _, _ = self._run_git(["add", f])
+                if code_add != 0:
+                    return False
+        else:
+            # Stage only tracked modified files (-u), avoid blindly staging untracked workspace files
+            code_add, _, _ = self._run_git(["add", "-u"])
+            if code_add != 0:
+                return False
         code_commit, _, _ = self._run_git(["commit", "-m", message])
         return code_commit == 0
 
@@ -68,3 +81,25 @@ class GitRepoManager:
 
     def reset_hard(self):
         self._run_git(["reset", "--hard", "HEAD"])
+
+    def is_working_tree_clean(self) -> bool:
+        """Check if working tree has any uncommitted changes or untracked files."""
+        code, stdout, _ = self._run_git(["status", "--porcelain"])
+        return code == 0 and len(stdout.strip()) == 0
+
+    def create_worktree(self, branch_name: str, target_dir: Path) -> Tuple[bool, str]:
+        """Create a dedicated, clean git worktree for isolated repair operations."""
+        code, stdout, stderr = self._run_git(["worktree", "add", "-b", branch_name, str(target_dir)])
+        if code != 0:
+            # If branch already exists, attach worktree to existing branch
+            code, stdout, stderr = self._run_git(["worktree", "add", str(target_dir), branch_name])
+        return (code == 0, stderr if code != 0 else "")
+
+    def remove_worktree(self, target_dir: Path, force: bool = True) -> bool:
+        """Safely remove a git worktree and prune metadata."""
+        args = ["worktree", "remove", str(target_dir)]
+        if force:
+            args.append("--force")
+        code, _, _ = self._run_git(args)
+        self._run_git(["worktree", "prune"])
+        return code == 0

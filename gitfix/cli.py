@@ -74,7 +74,7 @@ def analyze():
 @cli.command()
 @click.option("--auto-commit", is_flag=True, help="Automatically commit fix directly without safety branch.")
 @click.option("--auto-pr", is_flag=True, help="Create safety branch and open GitHub Pull Request automatically.")
-@click.option("--sandbox", is_flag=True, default=True, help="Execute test suite in isolated Docker container sandbox.")
+@click.option("--sandbox/--no-sandbox", default=True, help="Execute test suite in isolated Docker container sandbox.")
 @click.option("--provider", type=str, help="Override LLM provider (gemini, openai, mock).")
 @click.option("--model", type=str, help="Override LLM model name.")
 def fix(auto_commit, auto_pr, sandbox, provider, model):

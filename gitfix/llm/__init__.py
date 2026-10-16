@@ -23,8 +23,9 @@ def get_llm_provider(
     elif p_lower == "mock":
         return MockLLMProvider()
     else:
-        # Fallback to Nemotron
-        return NemotronProvider(model=model or "nvidia/nemotron-4-340b-instruct", temperature=temperature)
+        raise ValueError(
+            f"Unsupported LLM provider '{provider_name}'. Supported providers: 'nemotron', 'gemini', 'openai', 'ollama', 'mock'."
+        )
 
 __all__ = [
     "BaseLLMProvider",

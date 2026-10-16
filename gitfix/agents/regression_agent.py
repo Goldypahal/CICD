@@ -66,13 +66,23 @@ class RegressionAgent:
         # 2. Run tests on HEAD~1 baseline to verify if commit introduced regression
         print("[RegressionAgent] ⏪ Checking baseline test state at HEAD~1...")
         curr_branch = self.repo_manager.get_current_branch()
-        try:
-            subprocess.run(
-                ["git", "checkout", "HEAD~1"],
-                cwd=self.repo_dir,
-                capture_output=True,
-                text=True,
+        co_res = subprocess.run(
+            ["git", "checkout", "HEAD~1"],
+            cwd=self.repo_dir,
+            capture_output=True,
+            text=True,
+        )
+        if co_res.returncode != 0:
+            print(f"[RegressionAgent] ⚠️ Failed to checkout HEAD~1: {co_res.stderr.strip()}")
+            return RegressionAnalysisResult(
+                is_regression=True,
+                target_commit=current_commit,
+                baseline_passed=False,
+                current_passed=False,
+                summary=f"Could not checkout baseline HEAD~1: {co_res.stderr.strip()}",
             )
+
+        try:
             baseline_res = self.executor.run_command(self.test_command)
         finally:
             subprocess.run(

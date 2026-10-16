@@ -15,6 +15,7 @@ class SandboxConfig:
     read_only_root: bool = False
     network_disabled: bool = True
     image: str = "python:3.11-slim"
+    allow_host_fallback: bool = False
 
 
 class DockerSandboxRunner:
@@ -40,9 +41,23 @@ class DockerSandboxRunner:
             return False
 
     def run_sandbox_test(self, command: str) -> TestExecutionResult:
-        """Run test command inside Docker container or fallback to local process executor."""
+        """Run test command inside Docker container or fail closed if Docker unavailable."""
         if not self.docker_available:
-            print("[DockerSandbox] ⚠️ Docker daemon unavailable. Falling back to local process runner.")
+            if not self.config.allow_host_fallback:
+                msg = (
+                    "Docker daemon is unavailable. Test execution failed closed for security. "
+                    "Use --no-sandbox or enable allow_host_fallback to execute tests on the host system."
+                )
+                print(f"[DockerSandbox] 🛑 {msg}")
+                return TestExecutionResult(
+                    command=command,
+                    passed=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=msg,
+                    execution_time=0.0,
+                )
+            print("[DockerSandbox] ⚠️ Docker daemon unavailable. Falling back to local process runner (allow_host_fallback=True).")
             return self.fallback_executor.run_command(command)
 
         print(f"[DockerSandbox] 🛡️ Running test in Docker sandbox (CPUs={self.config.cpu_limit}, Mem={self.config.memory_limit})...")
@@ -54,6 +69,9 @@ class DockerSandboxRunner:
             "-v", f"{self.repo_dir}:/workspace",
             "-w", "/workspace",
         ]
+
+        if self.config.read_only_root:
+            docker_cmd.append("--read-only")
 
         if self.config.network_disabled:
             docker_cmd.extend(["--network", "none"])
@@ -86,5 +104,16 @@ class DockerSandboxRunner:
                 execution_time=float(self.config.timeout_seconds),
             )
         except Exception as e:
-            print(f"[DockerSandbox] ❌ Docker error: {str(e)}. Falling back to local runner.")
+            if not self.config.allow_host_fallback:
+                msg = f"Docker sandbox error: {str(e)}. Execution failed closed."
+                print(f"[DockerSandbox] 🛑 {msg}")
+                return TestExecutionResult(
+                    command=command,
+                    passed=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr=msg,
+                    execution_time=0.0,
+                )
+            print(f"[DockerSandbox] ❌ Docker error: {str(e)}. Falling back to local runner (allow_host_fallback=True).")
             return self.fallback_executor.run_command(command)

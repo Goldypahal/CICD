@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..llm.agentic_loop import AgenticRepairLoop, AgentLoopResult
 from ..llm.provider import BaseLLMProvider
@@ -18,10 +18,21 @@ class PatchAgentResult:
 class PatchAgent:
     """Executes tool-calling LLM repair loops to generate and apply code patches."""
 
-    def __init__(self, repo_dir: Path, llm: BaseLLMProvider, test_command: str):
+    def __init__(
+        self,
+        repo_dir: Path,
+        llm: BaseLLMProvider,
+        test_command: str,
+        security_agent: Optional[Any] = None,
+    ):
         self.repo_dir = Path(repo_dir).resolve()
         self.llm = llm
-        self.tools = AgentTools(self.repo_dir, test_command=test_command)
+        self.security_agent = security_agent
+        self.tools = AgentTools(
+            self.repo_dir,
+            test_command=test_command,
+            security_agent=self.security_agent,
+        )
         self.loop = AgenticRepairLoop(self.llm, self.tools, max_steps=10)
 
     def generate_and_apply_fix(self, context_prompt: str) -> PatchAgentResult:

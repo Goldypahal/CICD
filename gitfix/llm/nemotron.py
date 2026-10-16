@@ -8,10 +8,16 @@ from .provider import BaseLLMProvider
 class NemotronProvider(BaseLLMProvider):
     def __init__(self, model: str = "nvidia/nemotron-4-340b-instruct", temperature: float = 0.2):
         super().__init__(model=model, temperature=temperature)
-        self.api_key = os.getenv("NVIDIA_API_KEY", "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")
+        self.api_key = os.getenv("NVIDIA_API_KEY")
         self.base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
     def generate_fix(self, prompt: str) -> Dict[str, Any]:
+        if not self.api_key:
+            return {
+                "explanation": "NVIDIA_API_KEY environment variable is not configured. Please set NVIDIA_API_KEY to use NemotronProvider.",
+                "files": [],
+            }
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",

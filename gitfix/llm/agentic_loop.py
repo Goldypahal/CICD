@@ -130,9 +130,11 @@ class AgenticRepairLoop:
                             modified_files=list(set(modified_files)),
                         )
 
+        # Roll back unverified patches so the workspace remains in a clean state
+        self.tools.rollback()
         return AgentLoopResult(
             success=False,
-            summary="Max agent steps reached without resolving test failure.",
+            summary="Max agent steps reached without resolving test failure. Reverted trial patches.",
             steps_taken=self.max_steps,
-            modified_files=list(set(modified_files)),
+            modified_files=[],
         )
