@@ -1,0 +1,6 @@
+# GitFix's own test suite shells out to git, which python:3.11-slim lacks.
+sandbox:
+  setup_command: "apt-get update -qq && apt-get install -y -qq git >/dev/null && pip install -q -e '.[dev]'"
+validation:
+  test_command: "python -m pytest -q -p no:cacheprovider"
+  timeout_seconds: 600
