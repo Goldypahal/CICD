@@ -1,0 +1,58 @@
+name: E2E live test
+on:
+  push:
+    branches: [e2e/live-test]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  fixture-repair:
+    name: Sandbox + Gemini repair of a sample project
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install .
+      - name: Build sample repo with a regression
+        run: |
+          mkdir /tmp/fx && cd /tmp/fx
+          git init -q -b main && git config user.email ci@example.com && git config user.name ci
+          printf '[project]\nname = "calc"\nversion = "0.1.0"\n\n[tool.setuptools]\npy-modules = ["calc"]\n' > pyproject.toml
+          printf 'def apply_discount(price, percent):\n    """Price after a percentage discount, rounded to cents."""\n    return round(price * (1 - percent / 100), 2)\n' > calc.py
+          printf 'from calc import apply_discount\n\ndef test_ten_percent():\n    assert apply_discount(200, 10) == 180\n\ndef test_zero():\n    assert apply_discount(50, 0) == 50\n' > test_calc.py
+          printf '.gitfix/\n*.egg-info/\n__pycache__/\n' > .gitignore
+          git add . && git commit -qm base
+          sed -i 's/(1 - percent/(1 + percent/' calc.py && git commit -qam "refactor discount"
+      - name: Run GitFix (Docker sandbox, Gemini)
+        working-directory: /tmp/fx
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: gitfix fix --sandbox --provider gemini --model gemini-2.5-flash --auto-commit
+      - name: Check the result independently
+        working-directory: /tmp/fx
+        run: |
+          git log --oneline
+          git show --stat HEAD
+          git diff HEAD~1 -- test_calc.py | (! grep .) && echo "test file untouched"
+          pip install -q pytest && python -m pytest -q
+          docker images | grep gitfix-sandbox && exit 1 || echo "sandbox image cleaned up"
+
+  action-self-repair:
+    name: Full Action on this repo (opens PR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: ./
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          provider: gemini
+          model: gemini-2.5-flash
+          auto_pr: 'true'
+          use_sandbox: 'true'
+          base_branch: e2e/live-test
