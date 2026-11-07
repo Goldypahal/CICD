@@ -18,11 +18,18 @@ DETECTORS = [
 def detect_project(root_dir: Optional[Path] = None) -> ProjectInfo:
     target_dir = Path(root_dir or Path.cwd()).resolve()
     for detector_cls in DETECTORS:
-        detector = detector_cls(target_dir)
-        info = detector.detect()
+        info = detector_cls(target_dir).detect()
         if info:
             return info
-            
+
+    # Only now accept a bare *.py file as evidence of a Python project, so that e.g. a
+    # Node repo with a helper script at the root isn't misdetected as Python.
+    loose = PythonDetector(target_dir)
+    loose.loose = True
+    info = loose.detect()
+    if info:
+        return info
+
     # Default fallback if unknown
     return ProjectInfo(
         language="Unknown",

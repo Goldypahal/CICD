@@ -46,6 +46,13 @@ class NodeDetector(BaseDetector):
         build_cmd = f"{package_manager} run build" if "build" in scripts else None
         lint_cmd = f"{package_manager} run lint" if "lint" in scripts else None
 
+        install_cmd = {
+            "npm": "npm ci" if (self.root_dir / "package-lock.json").exists() else "npm install",
+            "yarn": "corepack enable && yarn install --frozen-lockfile",
+            "pnpm": "corepack enable && pnpm install --frozen-lockfile",
+            "bun": "npm install -g bun && bun install",
+        }[package_manager]
+
         return ProjectInfo(
             language=language,
             framework=framework,
@@ -55,4 +62,6 @@ class NodeDetector(BaseDetector):
             build_command=build_cmd,
             lint_command=lint_cmd,
             config_files=["package.json"],
+            install_command=install_cmd,
+            sandbox_image="node:20-slim",
         )

@@ -50,7 +50,17 @@ class DiagnosisAgent:
 
         prompt = self.context_builder.format_prompt(context_packet)
 
-        frame_files = [f.filename for f in parsed_error.frames if f.filename]
+        frame_files = []
+        for f in parsed_error.frames:
+            if not f.filename:
+                continue
+            path = Path(f.filename)
+            if path.is_absolute():
+                try:
+                    path = path.resolve().relative_to(self.repo_dir)
+                except ValueError:
+                    continue  # stdlib / site-packages frame
+            frame_files.append(str(path).replace("\\", "/"))
         affected = list(set(changed_files + frame_files))
 
         return DiagnosisReport(

@@ -20,12 +20,20 @@ DEFAULT_CONFIG = {
         "model": os.getenv("LLM_MODEL", "nvidia/nemotron-4-340b-instruct"),
         "max_retries": 5,
         "temperature": 0.2,
+        # Test files define "passing". Keep false so the agent can't fix a bug by weakening a test.
+        "allow_test_edits": False,
     },
     "git": {
         "branch_strategy": "ai-branch",  # "ai-branch" or "direct"
         "auto_commit": False,
         "auto_push": False,
         "branch_prefix": "ai/fix-",
+    },
+    "sandbox": {
+        "image": "auto",          # "auto" = picked from the detected language
+        "setup_command": "auto",  # "auto" = detected install command; "" to skip
+        "cpu_limit": "2.0",
+        "memory_limit": "2g",
     },
     "memory": {
         "enabled": True,
@@ -85,6 +93,27 @@ class Config:
     @property
     def timeout_seconds(self) -> int:
         return int(self._data["validation"]["timeout_seconds"])
+
+    @property
+    def test_command_override(self) -> Optional[str]:
+        cmd = self._data["validation"].get("test_command")
+        return None if not cmd or cmd == "auto" else str(cmd)
+
+    @property
+    def branch_prefix(self) -> str:
+        return str(self._data["git"].get("branch_prefix") or "ai/fix-")
+
+    @property
+    def auto_push(self) -> bool:
+        return bool(self._data["git"].get("auto_push"))
+
+    @property
+    def allow_test_edits(self) -> bool:
+        return bool(self._data["agent"].get("allow_test_edits"))
+
+    @property
+    def temperature(self) -> float:
+        return float(self._data["agent"].get("temperature", 0.2))
 
     def get(self, key_path: str, default: Any = None) -> Any:
         keys = key_path.split(".")

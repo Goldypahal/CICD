@@ -15,4 +15,6 @@ class RustDetector(BaseDetector):
             test_command="cargo test",
             build_command="cargo build",
             config_files=["Cargo.toml"],
+            install_command="cargo fetch",
+            sandbox_image="rust:1",
         )

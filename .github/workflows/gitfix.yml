@@ -9,7 +9,13 @@ on:
 jobs:
   auto-repair:
     name: Autonomous Fix Pipeline
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    # workflow_run runs with this repo's secrets, so only act on pushes to this repository
+    # (never on fork pull requests), and never on GitFix's own fix branches (avoids loops).
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      !startsWith(github.event.workflow_run.head_branch, 'ai/fix-')
     runs-on: ubuntu-latest
 
     permissions:
@@ -17,9 +23,10 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout Codebase
+      - name: Checkout the commit that failed CI
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Run GitFix AI Repair Agent
@@ -27,7 +34,9 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           auto_pr: 'true'
           use_sandbox: 'true'
+          base_branch: ${{ github.event.workflow_run.head_branch }}

@@ -13,10 +13,8 @@ class NemotronProvider(BaseLLMProvider):
 
     def generate_fix(self, prompt: str) -> Dict[str, Any]:
         if not self.api_key:
-            return {
-                "explanation": "NVIDIA_API_KEY environment variable is not configured. Please set NVIDIA_API_KEY to use NemotronProvider.",
-                "files": [],
-            }
+            msg = self.configuration_error()
+            return {"error": msg, "explanation": msg, "files": []}
 
         headers = {
             "Content-Type": "application/json",
@@ -47,10 +45,16 @@ class NemotronProvider(BaseLLMProvider):
                 content = result["choices"][0]["message"]["content"]
                 return self._parse_json_response(content)
         except Exception as e:
-            return {
-                "explanation": f"NVIDIA Nemotron provider error: {e}",
-                "files": [],
-            }
+            msg = f"NVIDIA Nemotron provider error: {e}"
+            return {"error": msg, "explanation": msg, "files": []}
+
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+    def configuration_error(self) -> str:
+        return "" if self.api_key else (
+            "NVIDIA_API_KEY environment variable is not configured. Please set NVIDIA_API_KEY to use NemotronProvider."
+        )
 
     def _parse_json_response(self, raw_text: str) -> Dict[str, Any]:
         try:

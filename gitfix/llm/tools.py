@@ -1,9 +1,13 @@
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from ..patcher.unified_diff import PatchError, apply_unified_diff, looks_like_unified_diff
+from ..runner.executor import ExecutionResult, TestExecutor
 
 
 @dataclass
@@ -13,56 +17,55 @@ class ToolResult:
     metadata: Optional[Dict[str, Any]] = None
 
 
+CommandRunner = Callable[[str], ExecutionResult]
+_SAFE_REVISION = re.compile(r"^[A-Za-z0-9_./~^@{}-]+(?:\.\.\.?[A-Za-z0-9_./~^@{}-]+)?$")
+
+
 class AgentTools:
-    """Provides file inspection, code search, testing, and patch tools for agentic LLM loops."""
+    """File inspection, search, test and patch tools exposed to the LLM.
+
+    `runner` executes test commands. The orchestrator passes the VerificationAgent's
+    runner, so tests the model triggers run in the same sandbox as final verification.
+    """
 
     def __init__(
         self,
         repo_dir: Path,
         test_command: Optional[str] = None,
         security_agent: Optional[Any] = None,
+        runner: Optional[CommandRunner] = None,
     ):
         self.repo_dir = Path(repo_dir).resolve()
         self.test_command = test_command or "pytest"
         self.security_agent = security_agent
-        self.backups: List[Tuple[Path, str]] = []
+        self.runner: CommandRunner = runner or TestExecutor(self.repo_dir, timeout=120).run_command
+        # (path, original content or None if the file did not exist)
+        self.backups: List[Tuple[Path, Optional[str]]] = []
 
-    def read_file(
-        self, filepath: str, start_line: Optional[int] = None, end_line: Optional[int] = None
-    ) -> ToolResult:
-        """Read file content with line numbers and optional slicing."""
+    def read_file(self, filepath: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> ToolResult:
         target_path = (self.repo_dir / filepath).resolve()
-        if not target_path.is_relative_to(self.repo_dir) or not target_path.exists():
+        if not target_path.is_relative_to(self.repo_dir) or not target_path.is_file():
             return ToolResult(success=False, output=f"Error: File '{filepath}' does not exist or is outside workspace.")
-
         try:
             with open(target_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-
             total_lines = len(lines)
-            s_idx = max(1, start_line) - 1 if start_line else 0
-            e_idx = min(total_lines, end_line) if end_line else total_lines
-
-            formatted_lines = [
-                f"{i + 1}: {lines[i]}" for i in range(s_idx, e_idx)
-            ]
-            output = "".join(formatted_lines)
-            return ToolResult(
-                success=True,
-                output=output,
-                metadata={"total_lines": total_lines, "showing": (s_idx + 1, e_idx)},
-            )
+            s_idx = max(1, int(start_line)) - 1 if start_line else 0
+            e_idx = min(total_lines, int(end_line)) if end_line else total_lines
+            output = "".join(f"{i + 1}: {lines[i]}" for i in range(s_idx, e_idx))
+            return ToolResult(success=True, output=output, metadata={"total_lines": total_lines, "showing": (s_idx + 1, e_idx)})
         except Exception as e:
-            return ToolResult(success=False, output=f"Error reading file '{filepath}': {str(e)}")
+            return ToolResult(success=False, output=f"Error reading file '{filepath}': {e}")
 
     def search_code(self, query: str, file_pattern: Optional[str] = None) -> ToolResult:
-        """Search codebase for symbols, functions, or text patterns."""
-        results = []
+        results: List[str] = []
         try:
-            regex = re.compile(query, re.IGNORECASE)
-            for root, _, files in os.walk(self.repo_dir):
-                if ".git" in root or "__pycache__" in root or "node_modules" in root:
-                    continue
+            try:
+                regex = re.compile(query, re.IGNORECASE)
+            except re.error:
+                regex = re.compile(re.escape(query), re.IGNORECASE)
+            for root, dirs, files in os.walk(self.repo_dir):
+                dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", "node_modules", ".venv", "venv", "target", "dist", "build"}]
                 for file in files:
                     if file_pattern and not file.endswith(file_pattern):
                         continue
@@ -77,59 +80,70 @@ class AgentTools:
                                         break
                     except Exception:
                         continue
+                    if len(results) >= 50:
+                        break
                 if len(results) >= 50:
                     break
-
             if not results:
                 return ToolResult(success=True, output=f"No matches found for search query: '{query}'.")
-
             return ToolResult(success=True, output="\n".join(results[:50]))
         except Exception as e:
-            return ToolResult(success=False, output=f"Search failed: {str(e)}")
+            return ToolResult(success=False, output=f"Search failed: {e}")
 
     def git_diff(self, revision: str = "HEAD~1..HEAD") -> ToolResult:
-        """Fetch git diff for given commit range or working tree."""
+        if not _SAFE_REVISION.match(revision or "") or revision.startswith("-"):
+            return ToolResult(success=False, output=f"Invalid revision: {revision!r}")
         try:
-            cmd = ["git", "diff", revision]
-            res = subprocess.run(cmd, cwd=self.repo_dir, capture_output=True, text=True, timeout=15)
+            res = subprocess.run(["git", "diff", revision, "--"], cwd=self.repo_dir, capture_output=True, text=True, timeout=15)
             if res.returncode == 0:
-                output = res.stdout if res.stdout else "No diff output."
-                return ToolResult(success=True, output=output[:5000])
+                return ToolResult(success=True, output=(res.stdout or "No diff output.")[:5000])
             return ToolResult(success=False, output=res.stderr or "Git diff command failed.")
         except Exception as e:
-            return ToolResult(success=False, output=f"Git diff failed: {str(e)}")
+            return ToolResult(success=False, output=f"Git diff failed: {e}")
+
+    def _validate_custom_command(self, custom_command: str) -> Optional[str]:
+        """Custom commands may only narrow the configured test command (e.g. add a test path or -k filter)."""
+        if any(ch in custom_command for ch in [";", "&", "|", "`", "$(", ">", "<", "\n"]):
+            return "Security Policy Blocked: Custom test command contains disallowed shell control characters."
+        try:
+            base = shlex.split(self.test_command)
+            custom = shlex.split(custom_command)
+        except ValueError:
+            return "Security Policy Blocked: Could not parse custom test command."
+        if custom[: len(base)] != base:
+            return f"Security Policy Blocked: Custom test command must start with the project test command `{self.test_command}`."
+        return None
 
     def run_test(self, custom_command: Optional[str] = None) -> ToolResult:
-        """Execute project test command and return test runner output."""
-        cmd = custom_command or self.test_command
-        # Security sanitization for custom test command
+        cmd = self.test_command
         if custom_command:
-            dangerous_chars = [";", "&&", "||", "|", "`", "$("]
-            if any(char in custom_command for char in dangerous_chars):
-                return ToolResult(
-                    success=False,
-                    output="Security Policy Blocked: Custom test command contains disallowed command chaining characters.",
-                )
-
+            error = self._validate_custom_command(custom_command)
+            if error:
+                return ToolResult(success=False, output=error)
+            cmd = custom_command
         try:
-            res = subprocess.run(cmd, cwd=self.repo_dir, capture_output=True, text=True, shell=True, timeout=60)
-            combined_output = (res.stdout + "\n" + res.stderr).strip()
-            passed = res.returncode == 0
+            res = self.runner(cmd)
             return ToolResult(
-                success=passed,
-                output=combined_output[:4000],
-                metadata={"exit_code": res.returncode, "passed": passed},
+                success=res.passed,
+                output=res.output[-4000:],
+                metadata={"exit_code": res.exit_code, "passed": res.passed},
             )
         except Exception as e:
-            return ToolResult(success=False, output=f"Test execution error: {str(e)}")
+            return ToolResult(success=False, output=f"Test execution error: {e}")
 
     def apply_patch(self, filepath: str, new_content: str) -> ToolResult:
-        """Pre-audit and overwrite file content with updated code in a reversible transaction."""
+        """Audit, then write full file content (or apply a single-file unified diff). Reversible."""
         target_path = (self.repo_dir / filepath).resolve()
         if not target_path.is_relative_to(self.repo_dir):
             return ToolResult(success=False, output="Security Error: File path outside workspace boundary.")
 
-        # Pre-audit before disk mutation
+        orig_content = target_path.read_text(encoding="utf-8") if target_path.is_file() else None
+        if looks_like_unified_diff(new_content):
+            try:
+                new_content = apply_unified_diff(orig_content or "", new_content)
+            except PatchError as e:
+                return ToolResult(success=False, output=f"Patch for '{filepath}' did not apply: {e}. Send the full file content instead.")
+
         if self.security_agent:
             is_safe, violations = self.security_agent.audit_file_modification(filepath, new_content)
             if not is_safe:
@@ -141,19 +155,17 @@ class AgentTools:
 
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            orig_content = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
             self.backups.append((target_path, orig_content))
-            with open(target_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
+            target_path.write_text(new_content, encoding="utf-8")
             return ToolResult(success=True, output=f"Successfully updated file: '{filepath}'.")
         except Exception as e:
-            return ToolResult(success=False, output=f"Failed to apply patch to '{filepath}': {str(e)}")
+            return ToolResult(success=False, output=f"Failed to apply patch to '{filepath}': {e}")
 
     def rollback(self) -> None:
-        """Roll back all file modifications made by apply_patch during this session."""
+        """Restore every file touched by apply_patch to its pre-session state."""
         for path, orig_content in reversed(self.backups):
             try:
-                if orig_content == "":
+                if orig_content is None:
                     if path.exists():
                         path.unlink()
                 else:
@@ -162,9 +174,12 @@ class AgentTools:
                 print(f"[AgentTools] Rollback error for {path}: {e}")
         self.backups.clear()
 
+    def commit_backups(self) -> None:
+        """Forget backups once changes are committed, so a later rollback can't undo them."""
+        self.backups.clear()
+
 
 def get_agent_tools_schema() -> List[Dict[str, Any]]:
-    """Return JSON Schema definitions for agentic LLM tool calling."""
     return [
         {
             "name": "read_file",
@@ -181,11 +196,11 @@ def get_agent_tools_schema() -> List[Dict[str, Any]]:
         },
         {
             "name": "search_code",
-            "description": "Search repository codebase for functions, classes, symbols, or error messages.",
+            "description": "Search the repository for functions, classes, symbols, or error messages.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search regex pattern or exact string."},
+                    "query": {"type": "string", "description": "Regex pattern or exact string."},
                     "file_pattern": {"type": "string", "description": "Optional file extension filter (e.g. '.py')."},
                 },
                 "required": ["query"],
@@ -193,29 +208,25 @@ def get_agent_tools_schema() -> List[Dict[str, Any]]:
         },
         {
             "name": "git_diff",
-            "description": "Get git diff for current working changes or commit range.",
+            "description": "Get git diff for a commit range (default: the failing commit, HEAD~1..HEAD).",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "revision": {"type": "string", "description": "Git revision or range, default 'HEAD~1..HEAD'."}
-                },
+                "properties": {"revision": {"type": "string", "description": "Git revision or range."}},
                 "required": [],
             },
         },
         {
             "name": "run_test",
-            "description": "Run project test suite to verify whether current code passes tests.",
+            "description": "Run the project test suite. custom_command may only narrow the default test command (e.g. add a test path).",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "custom_command": {"type": "string", "description": "Optional custom test command."}
-                },
+                "properties": {"custom_command": {"type": "string", "description": "Optional narrowed test command."}},
                 "required": [],
             },
         },
         {
             "name": "apply_patch",
-            "description": "Write updated replacement code to target file.",
+            "description": "Replace a source file with new content. Test files, CI config and dependency manifests are blocked.",
             "parameters": {
                 "type": "object",
                 "properties": {

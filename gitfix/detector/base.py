@@ -13,6 +13,10 @@ class ProjectInfo:
     lint_command: Optional[str] = None
     entry_point: Optional[str] = None
     config_files: List[str] = field(default_factory=list)
+    # Installs test dependencies inside the sandbox image (runs once, with network).
+    install_command: Optional[str] = None
+    # Docker image providing the toolchain for this project.
+    sandbox_image: Optional[str] = None
 
 class BaseDetector:
     def __init__(self, root_dir: Path):
