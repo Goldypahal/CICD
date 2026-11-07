@@ -16,7 +16,7 @@ class JavaDetector(BaseDetector):
                 language="Java",
                 package_manager="Maven",
                 test_framework="JUnit",
-                test_command="mvn test",
+                test_command="mvn verify",
                 build_command="mvn compile",
                 config_files=["pom.xml"],
                 install_command="mvn -q -B dependency:go-offline",
