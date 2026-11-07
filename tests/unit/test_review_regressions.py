@@ -366,3 +366,35 @@ def test_pr_compare_url_uses_real_remote(regressed_repo: Path):
     git(regressed_repo, "remote", "add", "origin", "git@github.com:Goldypahal/CICD.git")
     url = GitHubPRManager(regressed_repo).compare_url("ai/fix-abc", "main")
     assert url == "https://github.com/Goldypahal/CICD/compare/main...ai/fix-abc?expand=1"
+
+
+def test_provider_error_aborts_instead_of_retrying(regressed_repo: Path):
+    llm = ScriptedLLM([{"error": "400 INVALID_ARGUMENT", "files": []}] * 5)
+
+    res = GitFixOrchestrator(regressed_repo, make_config(regressed_repo, max_retries=5), llm, use_sandbox=False).run_repair_flow()
+
+    assert res.success is False and "400 INVALID_ARGUMENT" in res.summary
+    assert res.retries_used == 1 and len(llm.prompts) == 1
+    assert git(regressed_repo, "branch", "--show-current") == "main"
+
+
+def test_gemini_client_uses_v1beta(monkeypatch):
+    from google import genai
+    from gitfix.llm.gemini import GeminiProvider
+
+    captured = {}
+
+    class FakeModels:
+        def generate_content(self, **kw):
+            return type("R", (), {"text": '{"explanation": "ok", "files": []}'})()
+
+    class FakeClient:
+        def __init__(self, **kw):
+            captured.update(kw)
+            self.models = FakeModels()
+
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.delenv("GEMINI_API_VERSION", raising=False)
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    assert GeminiProvider().generate_fix("p") == {"explanation": "ok", "files": []}
+    assert captured["http_options"].api_version == "v1beta"

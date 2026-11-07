@@ -13,6 +13,7 @@ class PatchAgentResult:
     explanation: str
     modified_files: List[str]
     steps_taken: int
+    provider_error: Optional[str] = None
 
 
 class PatchAgent:
@@ -41,6 +42,7 @@ class PatchAgent:
             explanation=loop_res.summary,
             modified_files=loop_res.modified_files,
             steps_taken=loop_res.steps_taken,
+            provider_error=loop_res.provider_error,
         )
 
     def rollback(self) -> None:

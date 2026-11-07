@@ -18,7 +18,11 @@ class GeminiProvider(BaseLLMProvider):
             from google import genai
             from google.genai import types
 
-            client = genai.Client(api_key=self.api_key)
+            # JSON mode (response_mime_type) is only served on v1beta; newer SDKs default to v1.
+            client = genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(api_version=os.getenv("GEMINI_API_VERSION", "v1beta")),
+            )
             config = types.GenerateContentConfig(
                 temperature=self.temperature,
                 response_mime_type="application/json",

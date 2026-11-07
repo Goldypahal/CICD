@@ -183,8 +183,9 @@ class GitFixOrchestrator:
 
             patch_res = self.patch_agent.generate_and_apply_fix(diag.context_prompt)
             if not patch_res.modified_files:
-                if not self.llm.is_configured():
-                    return abandon("LLM provider became unavailable.", attempt)
+                if patch_res.provider_error:
+                    # API/auth/config errors won't fix themselves; don't burn the remaining attempts.
+                    return abandon(f"LLM provider error: {patch_res.provider_error}", attempt)
                 print("[GitFix-Orchestrator] ⚠️ No passing patch produced this attempt.")
                 continue
 

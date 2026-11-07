@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .provider import BaseLLMProvider
 from .tools import AgentTools, ToolResult, get_agent_tools_schema
@@ -12,6 +12,7 @@ class AgentLoopResult:
     summary: str
     steps_taken: int
     modified_files: List[str]
+    provider_error: Optional[str] = None
 
 
 def build_system_prompt(schema: List[Dict[str, Any]]) -> str:
@@ -60,6 +61,7 @@ class AgenticRepairLoop:
             {"role": "user", "content": initial_context},
         ]
         explanation = ""
+        provider_error: Optional[str] = None
 
         print("[AgenticLoop] 🤖 Starting tool-calling repair loop...")
         for step in range(1, self.max_steps + 1):
@@ -75,7 +77,8 @@ class AgenticRepairLoop:
 
             if response.get("error"):
                 # Provider-level failure (missing key, network error...). Retrying won't help.
-                print(f"[AgenticLoop] 🛑 LLM provider error: {response['error']}")
+                provider_error = str(response["error"])
+                print(f"[AgenticLoop] 🛑 LLM provider error: {provider_error}")
                 break
 
             if files_to_fix:
@@ -131,4 +134,5 @@ class AgenticRepairLoop:
             summary="Agent did not reach passing tests. Trial patches were reverted.",
             steps_taken=step if self.max_steps else 0,
             modified_files=[],
+            provider_error=provider_error,
         )
