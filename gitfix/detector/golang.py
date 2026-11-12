@@ -15,4 +15,6 @@ class GoDetector(BaseDetector):
             test_command="go test ./...",
             build_command="go build ./...",
             config_files=["go.mod"],
+            install_command="go mod download",
+            sandbox_image="golang:1.22",
         )

@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 from .provider import BaseLLMProvider
 from .nemotron import NemotronProvider
@@ -17,9 +18,12 @@ def get_llm_provider(
     elif p_lower == "gemini":
         m = model or "gemini-2.5-flash"
         return GeminiProvider(model=m, temperature=temperature)
-    elif p_lower in ["openai", "ollama"]:
-        m = model or "gpt-4o-mini"
-        return OpenAIProvider(model=m, temperature=temperature)
+    elif p_lower == "openai":
+        return OpenAIProvider(model=model or "gpt-4o-mini", temperature=temperature)
+    elif p_lower == "ollama":
+        # Ollama exposes an OpenAI-compatible API locally; no API key needed.
+        base_url = os.getenv("OLLAMA_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "http://localhost:11434/v1"
+        return OpenAIProvider(model=model or "llama3.1", temperature=temperature, base_url=base_url)
     elif p_lower == "mock":
         return MockLLMProvider()
     else:

@@ -19,6 +19,8 @@ class JavaDetector(BaseDetector):
                 test_command="mvn test",
                 build_command="mvn compile",
                 config_files=["pom.xml"],
+                install_command="mvn -q -B dependency:go-offline",
+                sandbox_image="maven:3.9-eclipse-temurin-17",
             )
         else:
             cmd = "./gradlew test" if (self.root_dir / "gradlew").exists() else "gradle test"
@@ -31,4 +33,6 @@ class JavaDetector(BaseDetector):
                 test_command=cmd,
                 build_command=build_cmd,
                 config_files=[cfg],
+                install_command=f"{'./gradlew' if (self.root_dir / 'gradlew').exists() else 'gradle'} --no-daemon dependencies",
+                sandbox_image="gradle:8-jdk17",
             )

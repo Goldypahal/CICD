@@ -1,28 +1,34 @@
 name: 'GitFix AI Autonomous Engineer'
-description: 'Autonomous repository-agnostic AI agent that detects test regressions, diagnoses root causes, and creates verified PR patches.'
+description: 'Detects test regressions, diagnoses the root cause, and opens a PR with a sandbox-verified fix.'
 author: 'GitFix Team'
 inputs:
   provider:
-    description: 'LLM provider (gemini, openai, anthropic, ollama, mock)'
+    description: 'LLM provider (nemotron, gemini, openai, ollama, mock)'
     required: false
     default: 'gemini'
   model:
-    description: 'LLM model name'
+    description: 'LLM model name (empty = provider default)'
     required: false
     default: 'gemini-2.5-flash'
   auto_pr:
-    description: 'Automatically open GitHub Pull Request on successful fix'
+    description: 'Open a GitHub Pull Request with the verified fix'
     required: false
     default: 'true'
   use_sandbox:
-    description: 'Run test suite inside Docker sandbox'
+    description: 'Run tests (including AI-written code) inside a network-isolated Docker sandbox'
     required: false
     default: 'true'
+  base_branch:
+    description: 'Branch the PR should target (empty = branch being repaired, else the repo default)'
+    required: false
+    default: ''
 outputs:
   success:
     description: 'Whether the regression was successfully repaired'
+    value: ${{ steps.gitfix.outputs.success }}
   pr_url:
     description: 'URL of the created Pull Request if auto_pr is enabled'
+    value: ${{ steps.gitfix.outputs.pr_url }}
 
 runs:
   using: 'composite'
@@ -34,9 +40,30 @@ runs:
 
     - name: Install GitFix Agent
       shell: bash
-      run: pip install -e .
+      # Install GitFix from the action's own checkout, not from the repository being repaired.
+      run: pip install "${{ github.action_path }}"
 
-    - name: Run Autonomous Repair Pipeline
+    - name: Configure git identity
       shell: bash
       run: |
-        gitfix fix --auto-pr=${{ inputs.auto_pr }} --sandbox=${{ inputs.use_sandbox }}
+        git config user.name "gitfix-bot"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+    - name: Run Autonomous Repair Pipeline
+      id: gitfix
+      shell: bash
+      # Inputs go through env vars, never interpolated into the script, to avoid shell injection.
+      env:
+        GITFIX_PROVIDER: ${{ inputs.provider }}
+        GITFIX_MODEL: ${{ inputs.model }}
+        GITFIX_AUTO_PR: ${{ inputs.auto_pr }}
+        GITFIX_SANDBOX: ${{ inputs.use_sandbox }}
+        GITFIX_BASE_BRANCH: ${{ inputs.base_branch }}
+      run: |
+        args=()
+        if [ "$GITFIX_AUTO_PR" = "true" ]; then args+=(--auto-pr); fi
+        if [ "$GITFIX_SANDBOX" = "true" ]; then args+=(--sandbox); else args+=(--no-sandbox); fi
+        if [ -n "$GITFIX_PROVIDER" ]; then args+=(--provider "$GITFIX_PROVIDER"); fi
+        if [ -n "$GITFIX_MODEL" ]; then args+=(--model "$GITFIX_MODEL"); fi
+        if [ -n "$GITFIX_BASE_BRANCH" ]; then args+=(--base-branch "$GITFIX_BASE_BRANCH"); fi
+        gitfix fix "${args[@]}"

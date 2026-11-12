@@ -14,3 +14,10 @@ class BaseLLMProvider(ABC):
         - "files": List[Dict[str, str]] with "path" and "content"
         """
         pass
+
+    def is_configured(self) -> bool:
+        """False when required credentials are missing, so the pipeline can fail fast."""
+        return True
+
+    def configuration_error(self) -> str:
+        return ""

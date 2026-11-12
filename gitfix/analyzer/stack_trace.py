@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
 
 @dataclass
 class StackFrame:
@@ -9,6 +10,7 @@ class StackFrame:
     function_name: Optional[str] = None
     code_line: Optional[str] = None
 
+
 @dataclass
 class ParsedError:
     error_type: str
@@ -16,47 +18,74 @@ class ParsedError:
     frames: List[StackFrame] = field(default_factory=list)
     raw_output: str = ""
 
+
 class StackTraceParser:
-    """Parses raw stdout/stderr output from test runs into structured error details."""
+    """Parses raw test-runner output into an error type, message and stack frames."""
 
     PYTHON_FRAME_REGEX = re.compile(r'File "(?P<file>[^"]+)", line (?P<line>\d+)(?:, in (?P<func>.+))?')
-    NODE_FRAME_REGEX = re.compile(r'at (?P<func>\S+ \([^)]+\)|\S+) \((?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+)\)')
-    JAVA_FRAME_REGEX = re.compile(r'at (?P<class>[a-zA-Z0-9_\.]+)\.(?P<method>[a-zA-Z0-9_]+)\((?P<file>[a-zA-Z0-9_\.]+\.java):(?P<line>\d+)\)')
+    PYTEST_LOCATION_REGEX = re.compile(r"^(?P<file>[\w./\\-]+\.py):(?P<line>\d+): (?P<type>\w+)$")
+    NODE_FRAME_REGEX = re.compile(r"at (?:(?P<func>[^\s(]+) )?\(?(?P<file>[^\s():]+\.[cm]?[jt]sx?):(?P<line>\d+):(?P<col>\d+)\)?")
+    JAVA_FRAME_REGEX = re.compile(r"at (?P<class>[\w.$]+)\.(?P<method>[\w$<>]+)\((?P<file>[\w$]+\.java):(?P<line>\d+)\)")
+    GO_FRAME_REGEX = re.compile(r"^\s*(?P<file>[\w./-]+\.go):(?P<line>\d+):")
+
+    # pytest "E   ValueError: msg" lines are the most precise source for Python
+    PYTEST_E_LINE = re.compile(r"^E\s+(?P<type>[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt))(?::\s*(?P<msg>.*))?$")
+    # pytest short summary: "FAILED tests/x.py::test_y - AssertionError: msg"
+    PYTEST_SUMMARY = re.compile(r"^(?:FAILED|ERROR) (?P<test>\S+)(?: - (?P<type>[A-Za-z_][\w.]*)(?::\s*(?P<msg>.*))?)?$")
+    GENERIC_ERROR = re.compile(r"(?P<type>\b[A-Z][\w.]*(?:Error|Exception))\b:?\s*(?P<msg>.*)")
+    GO_FAIL = re.compile(r"^--- FAIL: (?P<test>\S+)")
+    JEST_FAIL = re.compile(r"^\s*● (?P<test>.+)$")
 
     def parse(self, raw_output: str) -> ParsedError:
-        error_type = "UnknownError"
-        error_message = "Test or build failure detected."
-        frames = []
+        frames: List[StackFrame] = []
+        best: Optional[Tuple[int, str, str]] = None  # (priority, type, message); lower priority wins
+
+        def offer(priority: int, etype: str, msg: str) -> None:
+            nonlocal best
+            if best is None or priority < best[0]:
+                best = (priority, etype.strip(), (msg or "").strip())
 
         lines = raw_output.splitlines()
         for i, line in enumerate(lines):
-            # Python Traceback detection
-            py_match = self.PYTHON_FRAME_REGEX.search(line)
-            if py_match:
-                filename = py_match.group("file")
-                line_no = int(py_match.group("line"))
-                func = py_match.group("func")
-                code_snippet = lines[i+1].strip() if i + 1 < len(lines) else None
-                frames.append(StackFrame(filename=filename, line_number=line_no, function_name=func, code_line=code_snippet))
+            stripped = line.strip()
 
-            # Node/JS Stack Trace
-            node_match = self.NODE_FRAME_REGEX.search(line)
-            if node_match:
-                filename = node_match.group("file")
-                line_no = int(node_match.group("line"))
-                func = node_match.group("func")
-                frames.append(StackFrame(filename=filename, line_number=line_no, function_name=func))
+            m = self.PYTHON_FRAME_REGEX.search(line)
+            if m:
+                code = lines[i + 1].strip() if i + 1 < len(lines) else None
+                frames.append(StackFrame(m.group("file"), int(m.group("line")), m.group("func"), code))
+            m = self.PYTEST_LOCATION_REGEX.match(stripped)
+            if m:
+                frames.append(StackFrame(m.group("file"), int(m.group("line"))))
+            m = self.NODE_FRAME_REGEX.search(line)
+            if m and "node_modules" not in m.group("file") and not m.group("file").startswith("node:"):
+                frames.append(StackFrame(m.group("file"), int(m.group("line")), m.group("func")))
+            m = self.JAVA_FRAME_REGEX.search(line)
+            if m:
+                frames.append(StackFrame(m.group("file"), int(m.group("line")), f"{m.group('class')}.{m.group('method')}"))
+            m = self.GO_FRAME_REGEX.match(line)
+            if m:
+                frames.append(StackFrame(m.group("file"), int(m.group("line"))))
 
-            # Exception line (e.g. TypeError: ..., AssertionError: ...)
-            if ":" in line and any(err_kw in line for err_kw in ["Error", "Exception", "FAIL", "FAILED"]):
-                parts = line.split(":", 1)
-                if len(parts) == 2 and len(parts[0].strip()) < 50:
-                    error_type = parts[0].strip()
-                    error_message = parts[1].strip()
+            m = self.PYTEST_E_LINE.match(stripped)
+            if m:
+                offer(0, m.group("type"), m.group("msg") or "")
+                continue
+            m = self.PYTEST_SUMMARY.match(stripped)
+            if m and m.group("type"):
+                offer(1, m.group("type"), m.group("msg") or m.group("test"))
+                continue
+            m = self.GO_FAIL.match(stripped) or self.JEST_FAIL.match(line)
+            if m:
+                offer(2, "TestFailure", m.group("test"))
+                continue
+            m = self.GENERIC_ERROR.search(stripped)
+            if m:
+                offer(3, m.group("type"), m.group("msg"))
 
+        error_type, error_message = ("UnknownError", "Test or build failure detected.") if best is None else (best[1], best[2])
         return ParsedError(
             error_type=error_type,
-            error_message=error_message,
+            error_message=error_message or "Test or build failure detected.",
             frames=frames,
             raw_output=raw_output,
         )

@@ -2,7 +2,20 @@ from pathlib import Path
 from typing import Optional
 from .base import BaseDetector, ProjectInfo
 
+PIP_INSTALL = (
+    "pip install -q pytest"
+    " && if [ -f requirements.txt ]; then pip install -q -r requirements.txt; fi"
+    " && if [ -f requirements-dev.txt ]; then pip install -q -r requirements-dev.txt; fi"
+    " && if [ -f pyproject.toml ] || [ -f setup.py ]; then pip install -q -e '.[dev]' || pip install -q -e .; fi"
+)
+
+
 class PythonDetector(BaseDetector):
+    """Strict mode needs a Python manifest. Loose mode (used only after every other
+    detector has declined) also accepts bare *.py files at the repo root."""
+
+    loose: bool = False
+
     def detect(self) -> Optional[ProjectInfo]:
         pyproject = self.root_dir / "pyproject.toml"
         setup_py = self.root_dir / "setup.py"
@@ -15,7 +28,7 @@ class PythonDetector(BaseDetector):
         if req_txt.exists(): config_files.append("requirements.txt")
         if pipfile.exists(): config_files.append("Pipfile")
 
-        if not config_files and not list(self.root_dir.glob("*.py")):
+        if not config_files and not (self.loose and list(self.root_dir.glob("*.py"))):
             return None
 
         package_manager = "pip"
@@ -50,10 +63,15 @@ class PythonDetector(BaseDetector):
         # Test command detection
         test_framework = "pytest"
         test_command = "pytest"
+        install_command = PIP_INSTALL
         if package_manager == "poetry":
             test_command = "poetry run pytest"
+            install_command = "pip install -q poetry && poetry install --no-interaction"
         elif package_manager == "uv":
             test_command = "uv run pytest"
+            install_command = "pip install -q uv && uv sync"
+        elif package_manager == "pipenv":
+            install_command = "pip install -q pipenv pytest && pipenv install --dev --system"
 
         entry_point = None
         if (self.root_dir / "app" / "main.py").exists():
@@ -71,4 +89,6 @@ class PythonDetector(BaseDetector):
             lint_command="flake8" if (self.root_dir / ".flake8").exists() else None,
             entry_point=entry_point,
             config_files=config_files,
+            install_command=install_command,
+            sandbox_image="python:3.11-slim",
         )

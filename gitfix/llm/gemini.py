@@ -11,17 +11,18 @@ class GeminiProvider(BaseLLMProvider):
 
     def generate_fix(self, prompt: str) -> Dict[str, Any]:
         if not self.api_key:
-            # Fallback warning if key not provided
-            return {
-                "explanation": "GEMINI_API_KEY is missing from environment. Using fallback response generator.",
-                "files": []
-            }
+            msg = self.configuration_error()
+            return {"error": msg, "explanation": msg, "files": []}
 
         try:
             from google import genai
             from google.genai import types
 
-            client = genai.Client(api_key=self.api_key)
+            # JSON mode (response_mime_type) is only served on v1beta; newer SDKs default to v1.
+            client = genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(api_version=os.getenv("GEMINI_API_VERSION", "v1beta")),
+            )
             config = types.GenerateContentConfig(
                 temperature=self.temperature,
                 response_mime_type="application/json",
@@ -35,10 +36,14 @@ class GeminiProvider(BaseLLMProvider):
             raw_text = response.text or ""
             return self._parse_json_response(raw_text)
         except Exception as e:
-            return {
-                "explanation": f"Gemini API execution error: {e}",
-                "files": []
-            }
+            msg = f"Gemini API execution error: {e}"
+            return {"error": msg, "explanation": msg, "files": []}
+
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+    def configuration_error(self) -> str:
+        return "" if self.api_key else "GEMINI_API_KEY is not set."
 
     def _parse_json_response(self, raw_text: str) -> Dict[str, Any]:
         try:
